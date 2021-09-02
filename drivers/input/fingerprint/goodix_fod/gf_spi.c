@@ -97,12 +97,12 @@ static int enable_regulator_3V0(struct device *dev, struct regulator **pp_vreg)
 	} else {
 		dev_err(dev, "fp %s: of vreg successful found\n", __func__);
 	}
-/*	rc = regulator_set_voltage(vreg, 3000000, 3000000);
+	rc = regulator_set_voltage(vreg, 3000000, 3000000);
 
 	if (rc) {
 		return rc;
 	}
-*/
+
 	rc = regulator_set_load(vreg, 200000);
 
 	if (rc) {
