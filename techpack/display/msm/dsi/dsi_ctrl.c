@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/of_device.h>
@@ -266,6 +266,7 @@ static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl,
 {
 	int rc = 0;
 	struct dentry *dir, *state_file, *reg_dump, *cmd_dma_logs;
+	char dbg_name[DSI_DEBUG_NAME_LEN];
 
 	if (!dsi_ctrl || !parent) {
 		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
@@ -328,6 +329,10 @@ static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl,
 
 	dsi_ctrl->debugfs_root = dir;
 
+	snprintf(dbg_name, DSI_DEBUG_NAME_LEN, "dsi%d_ctrl",
+						dsi_ctrl->cell_index);
+	sde_dbg_reg_register_base(dbg_name, dsi_ctrl->hw.base,
+				msm_iomap_size(dsi_ctrl->pdev, "dsi_ctrl"));
 error_remove_dir:
 	debugfs_remove(dir);
 error:
@@ -340,8 +345,16 @@ static int dsi_ctrl_debugfs_deinit(struct dsi_ctrl *dsi_ctrl)
 	return 0;
 }
 #else
-static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl, struct dentry *parent)
+static int dsi_ctrl_debugfs_init(struct dsi_ctrl *dsi_ctrl,
+				 struct dentry *parent)
 {
+	char dbg_name[DSI_DEBUG_NAME_LEN];
+
+	snprintf(dbg_name, DSI_DEBUG_NAME_LEN, "dsi%d_ctrl",
+						dsi_ctrl->cell_index);
+	sde_dbg_reg_register_base(dbg_name,
+				dsi_ctrl->hw.base,
+				msm_iomap_size(dsi_ctrl->pdev, "dsi_ctrl"));
 	return 0;
 }
 static int dsi_ctrl_debugfs_deinit(struct dsi_ctrl *dsi_ctrl)
@@ -1306,16 +1319,17 @@ static void dsi_configure_command_scheduling(struct dsi_ctrl *dsi_ctrl,
 	}
 
 	/*
-	 * In case of command scheduling in command mode, set the maximum
-	 * possible size of the DMA start window in case no schedule line and
-	 * window size properties are defined by the panel.
+	 * In case of command scheduling in command mode, the window size
+	 * is reset to zero, if the total scheduling window is greater
+	 * than the panel height.
 	 */
 	if ((dsi_ctrl->host_config.panel_mode == DSI_OP_CMD_MODE) &&
 			dsi_hw_ops.configure_cmddma_window) {
+		sched_line_no = line_no;
 
-		sched_line_no = (line_no == 0) ? TEARCHECK_WINDOW_SIZE :
-					line_no;
-		window = (window == 0) ? timing->v_active : window;
+		if ((sched_line_no + window) > timing->v_active)
+			window = 0;
+
 		sched_line_no += timing->v_active;
 
 		dsi_hw_ops.configure_cmddma_window(&dsi_ctrl->hw, cmd_mem,
@@ -1360,21 +1374,8 @@ static void dsi_kickoff_msg_tx(struct dsi_ctrl *dsi_ctrl,
 		dsi_hw_ops.reset_trig_ctrl(&dsi_ctrl->hw,
 				&dsi_ctrl->host_config.common_config);
 
-	/*
-	 * Always enable DMA scheduling for video mode panel.
-	 *
-	 * In video mode panel, if the DMA is triggered very close to
-	 * the beginning of the active window and the DMA transfer
-	 * happens in the last line of VBP, then the HW state will
-	 * stay in ‘wait’ and return to ‘idle’ in the first line of VFP.
-	 * But somewhere in the middle of the active window, if SW
-	 * disables DSI command mode engine while the HW is still
-	 * waiting and re-enable after timing engine is OFF. So the
-	 * HW never ‘sees’ another vblank line and hence it gets
-	 * stuck in the ‘wait’ state.
-	 */
-	if ((flags & DSI_CTRL_CMD_CUSTOM_DMA_SCHED) ||
-		(dsi_ctrl->host_config.panel_mode == DSI_OP_VIDEO_MODE))
+	/* check if custom dma scheduling line needed */
+	if (flags & DSI_CTRL_CMD_CUSTOM_DMA_SCHED)
 		dsi_configure_command_scheduling(dsi_ctrl, cmd_mem);
 
 	dsi_ctrl->cmd_mode = (dsi_ctrl->host_config.panel_mode ==
@@ -1492,39 +1493,6 @@ static void dsi_ctrl_validate_msg_flags(struct dsi_ctrl *dsi_ctrl,
 		*flags &= ~DSI_CTRL_CMD_ASYNC_WAIT;
 }
 
-/**
- * dsi_ctrl_clear_slave_dma_status -   API to clear slave DMA status
- * @dsi_ctrl:                   DSI controller handle.
- * @flags:                      Modifiers
- */
-static void dsi_ctrl_clear_slave_dma_status(struct dsi_ctrl *dsi_ctrl, u32 flags)
-{
-	struct dsi_ctrl_hw_ops dsi_hw_ops;
-	u32 status = 0;
-
-	if (!dsi_ctrl) {
-		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
-		return;
-	}
-
-	/* Return if this is not the last command */
-	if (!(flags & DSI_CTRL_CMD_LAST_COMMAND))
-		return;
-
-	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY);
-
-	dsi_hw_ops = dsi_ctrl->hw.ops;
-
-	status = dsi_hw_ops.poll_slave_dma_status(&dsi_ctrl->hw);
-
-	if (status) {
-		status |= (DSI_CMD_MODE_DMA_DONE | DSI_BTA_DONE);
-		dsi_hw_ops.clear_interrupt_status(&dsi_ctrl->hw,
-						status);
-		SDE_EVT32(dsi_ctrl->cell_index, status);
-	}
-}
-
 static int dsi_message_tx(struct dsi_ctrl *dsi_ctrl,
 			  const struct mipi_dsi_msg *msg,
 			  u32 *flags)
@@ -1552,13 +1520,10 @@ static int dsi_message_tx(struct dsi_ctrl *dsi_ctrl,
 
 	dsi_ctrl_validate_msg_flags(dsi_ctrl, msg, flags);
 
-	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, *flags, dsi_ctrl->cmd_len);
+	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, flags);
 
 	if (dsi_ctrl->dma_wait_queued)
 		dsi_ctrl_flush_cmd_dma_queue(dsi_ctrl);
-
-	if (!(*flags & DSI_CTRL_CMD_BROADCAST_MASTER))
-		dsi_ctrl_clear_slave_dma_status(dsi_ctrl, *flags);
 
 	if (*flags & DSI_CTRL_CMD_NON_EMBEDDED_MODE) {
 		cmd_mem.offset = dsi_ctrl->cmd_buffer_iova;
@@ -2337,7 +2302,6 @@ void dsi_ctrl_put(struct dsi_ctrl *dsi_ctrl)
  */
 int dsi_ctrl_drv_init(struct dsi_ctrl *dsi_ctrl, struct dentry *parent)
 {
-	char dbg_name[DSI_DEBUG_NAME_LEN];
 	int rc = 0;
 
 	if (!dsi_ctrl) {
@@ -2358,10 +2322,6 @@ int dsi_ctrl_drv_init(struct dsi_ctrl *dsi_ctrl, struct dentry *parent)
 		DSI_CTRL_ERR(dsi_ctrl, "failed to init debug fs, rc=%d\n", rc);
 		goto error;
 	}
-
-	snprintf(dbg_name, DSI_DEBUG_NAME_LEN, "dsi%d_ctrl", dsi_ctrl->cell_index);
-	sde_dbg_reg_register_base(dbg_name, dsi_ctrl->hw.base,
-			msm_iomap_size(dsi_ctrl->pdev, "dsi_ctrl"));
 
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
@@ -2951,10 +2911,7 @@ void dsi_ctrl_enable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 			intr_idx >= DSI_STATUS_INTERRUPT_COUNT)
 		return;
 
-	SDE_EVT32(dsi_ctrl->cell_index, intr_idx,
-		dsi_ctrl->irq_info.irq_num, dsi_ctrl->irq_info.irq_stat_mask,
-		dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]);
-
+	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, intr_idx);
 	spin_lock_irqsave(&dsi_ctrl->irq_info.irq_lock, flags);
 
 	if (dsi_ctrl->irq_info.irq_stat_refcount[intr_idx] == 0) {
@@ -2987,10 +2944,7 @@ void dsi_ctrl_disable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 	if (!dsi_ctrl || intr_idx >= DSI_STATUS_INTERRUPT_COUNT)
 		return;
 
-	SDE_EVT32_IRQ(dsi_ctrl->cell_index, intr_idx,
-		dsi_ctrl->irq_info.irq_num, dsi_ctrl->irq_info.irq_stat_mask,
-		dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]);
-
+	SDE_EVT32_IRQ(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, intr_idx);
 	spin_lock_irqsave(&dsi_ctrl->irq_info.irq_lock, flags);
 
 	if (dsi_ctrl->irq_info.irq_stat_refcount[intr_idx])
