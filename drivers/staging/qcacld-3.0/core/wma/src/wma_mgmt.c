@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -342,10 +342,6 @@ int wma_peer_sta_kickout_event_handler(void *handle, uint8_t *event,
 			 QDF_MAC_ADDR_REF(macaddr));
 		return -EINVAL;
 	}
-
-	if (!wma_is_vdev_valid(vdev_id))
-		return -EINVAL;
-
 	vdev = wma->interfaces[vdev_id].vdev;
 	if (!vdev) {
 		wma_err("Not able to find vdev for VDEV_%d", vdev_id);
@@ -893,6 +889,46 @@ static inline uint8_t wma_parse_mpdudensity(uint8_t mpdudensity)
 		return 0;
 }
 
+#if defined(CONFIG_HL_SUPPORT) && defined(FEATURE_WLAN_TDLS)
+
+/**
+ * wma_unified_peer_state_update() - update peer state
+ * @sta_mac: pointer to sta mac addr
+ * @bss_addr: bss address
+ * @sta_type: sta entry type
+ *
+ *
+ * Return: None
+ */
+static void
+wma_unified_peer_state_update(
+	uint8_t *sta_mac,
+	uint8_t *bss_addr,
+	uint8_t sta_type)
+{
+	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
+
+	if (STA_ENTRY_TDLS_PEER == sta_type)
+		cdp_peer_state_update(soc, sta_mac,
+				      OL_TXRX_PEER_STATE_AUTH);
+	else
+		cdp_peer_state_update(soc, bss_addr,
+				      OL_TXRX_PEER_STATE_AUTH);
+}
+#else
+
+static inline void
+wma_unified_peer_state_update(
+	uint8_t *sta_mac,
+	uint8_t *bss_addr,
+	uint8_t sta_type)
+{
+	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
+
+	cdp_peer_state_update(soc, bss_addr, OL_TXRX_PEER_STATE_AUTH);
+}
+#endif
+
 #define CFG_CTRL_MASK              0xFF00
 #define CFG_DATA_MASK              0x00FF
 
@@ -1244,7 +1280,6 @@ QDF_STATUS wma_send_peer_assoc(tp_wma_handle wma,
 	QDF_STATUS status;
 	struct mac_context *mac = wma->mac_context;
 	struct wlan_channel *des_chan;
-	int32_t keymgmt, uccipher, authmode;
 
 	cmd = qdf_mem_malloc(sizeof(struct peer_assoc_params));
 	if (!cmd) {
@@ -1457,6 +1492,9 @@ QDF_STATUS wma_send_peer_assoc(tp_wma_handle wma,
 	if (params->wpa_rsn >> 1)
 		cmd->need_gtk_2_way = 1;
 
+	wma_unified_peer_state_update(params->staMac,
+				      params->bssId, params->staType);
+
 #ifdef FEATURE_WLAN_WAPI
 	if (params->encryptType == eSIR_ED_WPI) {
 		ret = wma_vdev_set_param(wma->wmi_handle, params->smesessionId,
@@ -1516,22 +1554,20 @@ QDF_STATUS wma_send_peer_assoc(tp_wma_handle wma,
 		cmd->rx_mcs_set = params->supportedRates.vhtRxMCSMap;
 		cmd->tx_max_rate = params->supportedRates.vhtTxHighestDataRate;
 		cmd->tx_mcs_set = params->supportedRates.vhtTxMCSMap;
-		/*
-		 *  tx_mcs_set is intersection of self tx NSS and peer rx mcs map
-		 */
-		if (params->vhtSupportedRxNss)
+
+		if (params->vhtSupportedRxNss) {
 			cmd->peer_nss = params->vhtSupportedRxNss;
-		else
-			cmd->peer_nss = ((cmd->tx_mcs_set & VHT2x2MCSMASK)
-					== VHT2x2MCSMASK) ? 1 : 2;
+		} else {
+			cmd->peer_nss = ((cmd->rx_mcs_set & VHT2x2MCSMASK)
+					 == VHT2x2MCSMASK) ? 1 : 2;
+		}
 
 		if (params->vht_mcs_10_11_supp) {
 			WMI_SET_BITS(cmd->tx_mcs_set, 16, cmd->peer_nss,
 				     ((1 << cmd->peer_nss) - 1));
 			WMI_VHT_MCS_NOTIFY_EXT_SS_SET(cmd->tx_mcs_set, 1);
 		}
-		if (params->vht_extended_nss_bw_cap &&
-		    (params->vht_160mhz_nss || params->vht_80p80mhz_nss)) {
+		if (params->vht_extended_nss_bw_cap) {
 			/*
 			 * bit[2:0] : Represents value of Rx NSS for 160 MHz
 			 * bit[5:3] : Represents value of Rx NSS for 80_80 MHz
@@ -1540,12 +1576,9 @@ QDF_STATUS wma_send_peer_assoc(tp_wma_handle wma,
 			 * bit[31]  : MSB(0/1): 1 in case of valid data
 			 */
 			cmd->peer_bw_rxnss_override |= (1 << 31);
-			if (params->vht_160mhz_nss)
-				cmd->peer_bw_rxnss_override |=
-					(params->vht_160mhz_nss - 1);
-			if (params->vht_80p80mhz_nss)
-				cmd->peer_bw_rxnss_override |=
-					((params->vht_80p80mhz_nss - 1) << 3);
+			cmd->peer_bw_rxnss_override |= params->vht_160mhz_nss;
+			cmd->peer_bw_rxnss_override |=
+				(params->vht_80p80mhz_nss << 3);
 			wma_debug("peer_bw_rxnss_override %0X",
 				  cmd->peer_bw_rxnss_override);
 		}
@@ -1571,16 +1604,6 @@ QDF_STATUS wma_send_peer_assoc(tp_wma_handle wma,
 
 	/* Till conversion is not done in WMI we need to fill fw phy mode */
 	cmd->peer_phymode = wma_host_to_fw_phymode(phymode);
-
-	keymgmt = wlan_crypto_get_param(intr->vdev, WLAN_CRYPTO_PARAM_KEY_MGMT);
-	authmode = wlan_crypto_get_param(intr->vdev,
-					 WLAN_CRYPTO_PARAM_AUTH_MODE);
-	uccipher = wlan_crypto_get_param(intr->vdev,
-					 WLAN_CRYPTO_PARAM_UCAST_CIPHER);
-
-	cmd->akm = cm_crypto_authmode_to_wmi_authmode(authmode,
-						      keymgmt,
-						      uccipher);
 
 	status = wmi_unified_peer_assoc_send(wma->wmi_handle,
 					 cmd);
@@ -2008,22 +2031,8 @@ static QDF_STATUS wma_unified_bcn_tmpl_send(tp_wma_handle wma,
 		tmpl_len = *(uint32_t *) &bcn_info->beacon[0];
 	else
 		tmpl_len = bcn_info->beaconLength;
-
-	if (tmpl_len > WMI_BEACON_TX_BUFFER_SIZE) {
-		wma_err("tmpl_len: %d > %d. Invalid tmpl len", tmpl_len,
-			WMI_BEACON_TX_BUFFER_SIZE);
-		return -EINVAL;
-	}
-
-	if (p2p_ie_len) {
-		if (tmpl_len <= p2p_ie_len) {
-			wma_err("tmpl_len %d <= p2p_ie_len %d, Invalid",
-				tmpl_len, p2p_ie_len);
-			return -EINVAL;
-		}
+	if (p2p_ie_len)
 		tmpl_len -= (uint32_t) p2p_ie_len;
-	}
-
 	frm = bcn_info->beacon + bytes_to_strip;
 	tmpl_len_aligned = roundup(tmpl_len, sizeof(A_UINT32));
 	/*
@@ -2405,6 +2414,7 @@ void wma_beacon_miss_handler(tp_wma_handle wma, uint32_t vdev_id, int32_t rssi)
 	wma_lost_link_info_handler(wma, vdev_id, rssi);
 }
 
+#ifdef ROAM_OFFLOAD_V1
 void wlan_cm_send_beacon_miss(uint8_t vdev_id, int32_t rssi)
 {
 	tp_wma_handle wma;
@@ -2417,7 +2427,7 @@ void wlan_cm_send_beacon_miss(uint8_t vdev_id, int32_t rssi)
 
 	wma_beacon_miss_handler(wma, vdev_id, rssi);
 }
-
+#endif
 /**
  * wma_get_status_str() - get string of tx status from firmware
  * @status: tx status
@@ -3153,7 +3163,7 @@ int wma_process_rmf_frame(tp_wma_handle wma_handle,
 			return -EINVAL;
 		}
 
-		if (rx_pkt->pkt_meta.mpdu_data_len > MAX_MGMT_MPDU_LEN) {
+		if (rx_pkt->pkt_meta.mpdu_data_len > WMA_MAX_MGMT_MPDU_LEN) {
 			wma_err("Data Len %d greater than max, dropping frame",
 				rx_pkt->pkt_meta.mpdu_data_len);
 			cds_pkt_return_packet(rx_pkt);
@@ -3425,7 +3435,7 @@ int wma_form_rx_packet(qdf_nbuf_t buf,
 	/*
 	 * If the mpdu_data_len is greater than Max (2k), drop the frame
 	 */
-	if (rx_pkt->pkt_meta.mpdu_data_len > MAX_MGMT_MPDU_LEN) {
+	if (rx_pkt->pkt_meta.mpdu_data_len > WMA_MAX_MGMT_MPDU_LEN) {
 		wma_err("Data Len %d greater than max, dropping frame from "QDF_MAC_ADDR_FMT,
 			 rx_pkt->pkt_meta.mpdu_data_len,
 			 QDF_MAC_ADDR_REF(wh->i_addr3));

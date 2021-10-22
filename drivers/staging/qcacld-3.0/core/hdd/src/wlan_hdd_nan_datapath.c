@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -124,18 +124,15 @@ static bool hdd_is_ndp_allowed(struct hdd_context *hdd_ctx)
 {
 	struct hdd_adapter *adapter, *next_adapter = NULL;
 	struct hdd_station_ctx *sta_ctx;
-	wlan_net_dev_ref_dbgid dbgid = NET_DEV_HOLD_IS_NDP_ALLOWED;
 
-	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter,
-					   dbgid) {
+	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter) {
 		switch (adapter->device_mode) {
 		case QDF_P2P_GO_MODE:
 			if (test_bit(SOFTAP_BSS_STARTED,
 				     &adapter->event_flags)) {
-				hdd_adapter_dev_put_debug(adapter, dbgid);
+				dev_put(adapter->dev);
 				if (next_adapter)
-					hdd_adapter_dev_put_debug(next_adapter,
-								  dbgid);
+					dev_put(next_adapter->dev);
 				return false;
 			}
 			break;
@@ -143,17 +140,16 @@ static bool hdd_is_ndp_allowed(struct hdd_context *hdd_ctx)
 			sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
 			if (hdd_conn_is_connected(sta_ctx) ||
 			    hdd_is_connecting(sta_ctx)) {
-				hdd_adapter_dev_put_debug(adapter, dbgid);
+				dev_put(adapter->dev);
 				if (next_adapter)
-					hdd_adapter_dev_put_debug(next_adapter,
-								  dbgid);
+					dev_put(next_adapter->dev);
 				return false;
 			}
 			break;
 		default:
 			break;
 		}
-		hdd_adapter_dev_put_debug(adapter, dbgid);
+		dev_put(adapter->dev);
 	}
 
 	return true;
@@ -163,19 +159,16 @@ static bool hdd_is_ndp_allowed(struct hdd_context *hdd_ctx)
 {
 	struct hdd_adapter *adapter, *next_adapter = NULL;
 	struct hdd_station_ctx *sta_ctx;
-	wlan_net_dev_ref_dbgid dbgid = NET_DEV_HOLD_IS_NDP_ALLOWED;
 
-	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter,
-					   dbgid) {
+	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter) {
 		switch (adapter->device_mode) {
 		case QDF_P2P_GO_MODE:
 		case QDF_SAP_MODE:
 			if (test_bit(SOFTAP_BSS_STARTED,
 				     &adapter->event_flags)) {
-				hdd_adapter_dev_put_debug(adapter, dbgid);
+				dev_put(adapter->dev);
 				if (next_adapter)
-					hdd_adapter_dev_put_debug(next_adapter,
-								  dbgid);
+					dev_put(next_adapter->dev);
 				return false;
 			}
 			break;
@@ -183,17 +176,16 @@ static bool hdd_is_ndp_allowed(struct hdd_context *hdd_ctx)
 			sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
 			if (hdd_conn_is_connected(sta_ctx) ||
 			    hdd_is_connecting(sta_ctx)) {
-				hdd_adapter_dev_put_debug(adapter, dbgid);
+				dev_put(adapter->dev);
 				if (next_adapter)
-					hdd_adapter_dev_put_debug(next_adapter,
-								  dbgid);
+					dev_put(next_adapter->dev);
 				return false;
 			}
 			break;
 		default:
 			break;
 		}
-		hdd_adapter_dev_put_debug(adapter, dbgid);
+		dev_put(adapter->dev);
 	}
 
 	return true;
@@ -255,7 +247,7 @@ static int hdd_ndi_start_bss(struct hdd_adapter *adapter,
 	roam_profile->SSIDs.numOfSSIDs = 1;
 	roam_profile->SSIDs.SSIDList->SSID.length = 0;
 
-	roam_profile->phyMode = eCSR_DOT11_MODE_AUTO;
+	roam_profile->phyMode = eCSR_DOT11_MODE_11ac;
 	roam_profile->BSSType = eCSR_BSS_TYPE_NDI;
 	roam_profile->BSSIDs.numOfBSSIDs = 1;
 	qdf_mem_copy((void *)(roam_profile->BSSIDs.bssid),
@@ -584,11 +576,10 @@ int hdd_ndi_open(char *iface_name)
 		return -EINVAL;
 	}
 
-	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter,
-					   NET_DEV_HOLD_NDI_OPEN) {
+	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter) {
 		if (WLAN_HDD_IS_NDI(adapter))
 			ndi_adapter_count++;
-		hdd_adapter_dev_put_debug(adapter, NET_DEV_HOLD_NDI_OPEN);
+		dev_put(adapter->dev);
 	}
 	if (ndi_adapter_count >= MAX_NDI_ADAPTERS) {
 		hdd_err("Can't allow more than %d NDI adapters",
@@ -899,15 +890,13 @@ void hdd_ndp_session_end_handler(struct hdd_adapter *adapter)
 
 /**
  * hdd_ndp_new_peer_handler() - NDP new peer indication handler
- * @vdev_id: vdev id
- * @sta_id: station id
- * @peer_mac_addr: peer mac address
- * @first_peer: first peer
+ * @adapter: pointer to adapter context
+ * @ind_params: indication parameters
  *
  * Return: none
  */
 int hdd_ndp_new_peer_handler(uint8_t vdev_id, uint16_t sta_id,
-			struct qdf_mac_addr *peer_mac_addr, bool first_peer)
+			struct qdf_mac_addr *peer_mac_addr, bool fist_peer)
 {
 	struct hdd_context *hdd_ctx;
 	struct hdd_adapter *adapter;
@@ -950,15 +939,8 @@ int hdd_ndp_new_peer_handler(uint8_t vdev_id, uint16_t sta_id,
 	qdf_copy_macaddr(&roam_info->bssid, peer_mac_addr);
 
 	/* perform following steps for first new peer ind */
-	if (first_peer) {
+	if (fist_peer) {
 		hdd_debug("Set ctx connection state to connected");
-		/* Disable LRO/GRO for NDI Mode */
-		if (hdd_ctx->ol_enable &&
-		    !NAN_CONCURRENCY_SUPPORTED(hdd_ctx->psoc)) {
-			hdd_debug("Disable LRO/GRO in NDI Mode");
-			hdd_disable_rx_ol_in_concurrency(true);
-		}
-
 		hdd_bus_bw_compute_prev_txrx_stats(adapter);
 		hdd_bus_bw_compute_timer_start(hdd_ctx);
 		sta_ctx->conn_info.conn_state = eConnectionState_NdiConnected;
@@ -967,14 +949,6 @@ int hdd_ndp_new_peer_handler(uint8_t vdev_id, uint16_t sta_id,
 					adapter,
 					WLAN_START_ALL_NETIF_QUEUE_N_CARRIER,
 					WLAN_CONTROL_PATH);
-		/*
-		 * This is called only for first peer. So, no.of NDP sessions
-		 * are always 1
-		 */
-		if (!NDI_CONCURRENCY_SUPPORTED(hdd_ctx->psoc))
-			hdd_indicate_active_ndp_cnt(hdd_ctx->psoc, vdev_id, 1);
-
-		wlan_twt_concurrency_update(hdd_ctx);
 	}
 	qdf_mem_free(roam_info);
 	return 0;
@@ -998,17 +972,6 @@ void hdd_cleanup_ndi(struct hdd_context *hdd_ctx,
 				     WLAN_CONTROL_PATH);
 	hdd_bus_bw_compute_reset_prev_txrx_stats(adapter);
 	hdd_bus_bw_compute_timer_try_stop(hdd_ctx);
-	if ((hdd_ctx->ol_enable &&
-	     !NAN_CONCURRENCY_SUPPORTED(hdd_ctx->psoc)) &&
-	    ((policy_mgr_get_connection_count(hdd_ctx->psoc) == 0) ||
-	     ((policy_mgr_get_connection_count(hdd_ctx->psoc) == 1) &&
-	      (policy_mgr_mode_specific_connection_count(
-						hdd_ctx->psoc,
-						PM_STA_MODE,
-						NULL) == 1)))) {
-		hdd_debug("Enable LRO/GRO");
-		hdd_disable_rx_ol_in_concurrency(false);
-	}
 }
 
 /**
@@ -1049,13 +1012,5 @@ void hdd_ndp_peer_departed_handler(uint8_t vdev_id, uint16_t sta_id,
 		hdd_debug("No more ndp peers.");
 		hdd_cleanup_ndi(hdd_ctx, adapter);
 		qdf_event_set(&adapter->peer_cleanup_done);
-		/*
-		 * This is called only for last peer. So, no.of NDP sessions
-		 * are always 0
-		 */
-		if (!NDI_CONCURRENCY_SUPPORTED(hdd_ctx->psoc))
-			hdd_indicate_active_ndp_cnt(hdd_ctx->psoc, vdev_id, 0);
-
-		wlan_twt_concurrency_update(hdd_ctx);
 	}
 }

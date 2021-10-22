@@ -250,6 +250,9 @@ QDF_STATUS csr_roam_issue_disassociate_cmd(struct mac_context *mac,
 					   uint32_t sessionId,
 					   eCsrRoamDisconnectReason reason,
 					   enum wlan_reason_code mac_reason);
+QDF_STATUS csr_roam_disconnect_internal(struct mac_context *mac, uint32_t sessionId,
+					eCsrRoamDisconnectReason reason,
+					enum wlan_reason_code mac_reason);
 /* pCommand may be NULL */
 void csr_roam_remove_duplicate_command(struct mac_context *mac, uint32_t sessionId,
 				       tSmeCmd *pCommand,
@@ -725,21 +728,9 @@ void csr_get_pmk_info(struct mac_context *mac_ctx, uint8_t session_id,
  *
  * Return QDF_STATUS - usually it succeed unless sessionId is not found
  */
-QDF_STATUS csr_roam_set_psk_pmk(struct mac_context *mac,
-				struct wlan_crypto_pmksa *pmksa,
-				uint8_t vdev_id, bool update_to_fw);
-
-/**
- * csr_set_pmk_cache_ft() - store MDID in PMK cache
- *
- * @mac  - pointer to global structure for MAC
- * @session_id - Sme session id
- * @pmk_cache: pointer to a structure of PMK
- *
- * Return QDF_STATUS - usually it succeed unless session_id is not found
- */
-QDF_STATUS csr_set_pmk_cache_ft(struct mac_context *mac, uint32_t session_id,
-				tPmkidCacheInfo *pmk_cache);
+QDF_STATUS csr_roam_set_psk_pmk(struct mac_context *mac, uint32_t sessionId,
+				uint8_t *psk_pmk, size_t pmk_len,
+				bool update_to_fw);
 
 QDF_STATUS csr_roam_set_key_mgmt_offload(struct mac_context *mac_ctx,
 					 uint32_t session_id,
@@ -756,6 +747,19 @@ QDF_STATUS csr_roam_set_key_mgmt_offload(struct mac_context *mac_ctx,
  * big enough
  */
 QDF_STATUS csr_roam_get_wpa_rsn_req_ie(struct mac_context *mac, uint32_t sessionId,
+				       uint32_t *pLen, uint8_t *pBuf);
+
+/*
+ * csr_roam_get_wpa_rsn_rsp_ie() -
+ * Return the WPA or RSN IE from the beacon or probe rsp if connected
+ *
+ * pLen - caller allocated memory that has the length of pBuf as input.
+ * Upon returned, *pLen has the needed or IE length in pBuf.
+ * pBuf - Caller allocated memory that contain the IE field, if any, upon return
+ * Return QDF_STATUS - when fail, it usually means the buffer allocated is not
+ * big enough
+ */
+QDF_STATUS csr_roam_get_wpa_rsn_rsp_ie(struct mac_context *mac, uint32_t sessionId,
 				       uint32_t *pLen, uint8_t *pBuf);
 
 /**
@@ -892,16 +896,13 @@ QDF_STATUS csr_roam_del_pmkid_from_cache(struct mac_context *mac,
 
 /**
  * csr_update_pmk_cache_ft - API to update MDID in PMKSA cache entry
- * @mac: Pointer to global structure for MAC
- * @vdev_id: session ID
- * @pmk_cache: pointer to pmk cache
- * @scan_res: pointer to tCsrScanResultInfo
+ * @session_id: session ID
+ * @session: sme session pointer
  *
  * Return: None
  */
-void csr_update_pmk_cache_ft(struct mac_context *mac, uint32_t vdev_id,
-			     tPmkidCacheInfo *pmk_cache,
-			     tCsrScanResultInfo *scan_res);
+void csr_update_pmk_cache_ft(struct mac_context *mac, uint32_t session_id,
+			     struct csr_roam_session *session);
 
 #if defined(WLAN_SAE_SINGLE_PMK) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
 /**
@@ -1066,9 +1067,16 @@ bool csr_is_pmkid_found_for_peer(struct mac_context *mac,
 #ifdef WLAN_FEATURE_11AX
 void csr_update_session_he_cap(struct mac_context *mac_ctx,
 			struct csr_roam_session *session);
+void csr_init_session_twt_cap(struct csr_roam_session *session,
+			      uint32_t type_of_persona);
 #else
 static inline void csr_update_session_he_cap(struct mac_context *mac_ctx,
 			struct csr_roam_session *session)
+{
+}
+
+static inline void csr_init_session_twt_cap(struct csr_roam_session *session,
+					    uint32_t type_of_persona)
 {
 }
 #endif

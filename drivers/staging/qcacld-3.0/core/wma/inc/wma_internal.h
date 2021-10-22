@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -344,8 +344,26 @@ wma_roam_scan_chan_list_event_handler(WMA_HANDLE handle, uint8_t *event,
 }
 #endif
 
+#ifndef ROAM_OFFLOAD_V1
+/**
+ * wma_update_per_roam_config() -per roam config parameter updation to FW
+ * @handle: wma handle
+ * @req_buf: per roam config parameters
+ *
+ * Return: none
+ */
+void wma_update_per_roam_config(WMA_HANDLE handle,
+				 struct wlan_per_roam_config_req *req_buf);
+#endif
 QDF_STATUS wma_update_channel_list(WMA_HANDLE handle,
 				   tSirUpdateChanList *chan_list);
+
+#if defined(WLAN_FEATURE_ROAM_OFFLOAD) && !defined(ROAM_OFFLOAD_V1)
+QDF_STATUS wma_roam_scan_fill_self_caps(tp_wma_handle wma_handle,
+					roam_offload_param *
+					roam_offload_params,
+					struct roam_offload_scan_req *roam_req);
+#endif
 
 A_UINT32 e_csr_auth_type_to_rsn_authmode(enum csr_akm_type authtype,
 					 eCsrEncryptionType encr);
@@ -629,6 +647,10 @@ QDF_STATUS wma_remove_peer(tp_wma_handle wma, uint8_t *mac_addr,
 
 QDF_STATUS wma_peer_unmap_conf_send(tp_wma_handle wma,
 				    struct send_peer_unmap_conf_params *msg);
+
+QDF_STATUS wma_create_peer(tp_wma_handle wma,
+			   uint8_t peer_addr[QDF_MAC_ADDR_SIZE],
+			   uint32_t peer_type, uint8_t vdev_id);
 
 /**
  * wma_send_del_bss_response() - send delete bss resp
@@ -950,31 +972,6 @@ void wma_set_bss_rate_flags(tp_wma_handle wma, uint8_t vdev_id,
  * Return: Rate flags corresponding to ch_width
  */
 enum tx_rate_info wma_get_vht_rate_flags(enum phy_ch_width ch_width);
-
-/**
- * wma_get_ht_rate_flags() - Return the HT rate flags corresponding to the BW
- * @ch_width: BW for which rate flags is required
- *
- * Return: Rate flags corresponding to ch_width
- */
-enum tx_rate_info wma_get_ht_rate_flags(enum phy_ch_width ch_width);
-
-/**
- * wma_get_he_rate_flags() - Return the HE rate flags corresponding to the BW
- * @ch_width: BW for which rate flags is required
- *
- * Return: Rate flags corresponding to ch_width
- */
-enum tx_rate_info wma_get_he_rate_flags(enum phy_ch_width ch_width);
-
-/**
- * wma_set_vht_txbf_cfg() - set VHT Tx beamforming capability to FW
- * @mac: Global MAC context
- * @vdev_id: VDEV id
- *
- * Return: None
- */
-void wma_set_vht_txbf_cfg(struct mac_context *mac, uint8_t vdev_id);
 
 int32_t wmi_unified_send_txbf(tp_wma_handle wma, tpAddStaParams params);
 
@@ -1398,18 +1395,6 @@ QDF_STATUS wma_process_set_ie_info(tp_wma_handle wma,
 int wma_peer_assoc_conf_handler(void *handle, uint8_t *cmd_param_info,
 				uint32_t len);
 
-/**
- * wma_peer_create_confirm_handler  - Handle peer create confirmation
- * result
- * @handle: wma_handle
- * @evt_param_info: event data
- * @len: event length
- *
- * Return: 0 on success. Error value on failure
- */
-int wma_peer_create_confirm_handler(void *handle, uint8_t *evt_param_info,
-				    uint32_t len);
-
 int wma_peer_delete_handler(void *handle, uint8_t *cmd_param_info,
 				uint32_t len);
 void wma_remove_req(tp_wma_handle wma, uint8_t vdev_id,
@@ -1728,6 +1713,16 @@ int wma_cold_boot_cal_event_handler(void *wma_ctx, uint8_t *event_buff,
  */
 int wma_oem_event_handler(void *wma_ctx, uint8_t *event_buff, uint32_t len);
 #endif
+
+/**
+ * wma_set_roam_triggers() - Send roam trigger bitmap to WMI
+ * @wma_handle: wma handle
+ * @triggers: Carries vdev id and roam trigger bitmap.
+ *
+ * Return: Success or Failure status
+ */
+QDF_STATUS wma_set_roam_triggers(tp_wma_handle wma_handle,
+				 struct wlan_roam_triggers *triggers);
 
 /**
  * wma_get_ani_level_evt_handler - event handler to fetch ani level

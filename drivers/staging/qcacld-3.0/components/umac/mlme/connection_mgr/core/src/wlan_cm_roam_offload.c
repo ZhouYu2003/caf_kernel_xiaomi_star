@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -76,45 +76,6 @@ cm_roam_fill_rssi_change_params(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
 	return QDF_STATUS_SUCCESS;
 }
 
-/**
- * cm_roam_is_per_roam_allowed()  - Check if PER roam trigger needs to be
- * disabled based on the current connected rates.
- * @psoc:   Pointer to the psoc object
- * @vdev_id: Vdev id
- *
- * Return: true if PER roam trigger is allowed
- */
-static bool
-cm_roam_is_per_roam_allowed(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id)
-{
-	struct qdf_mac_addr connected_bssid = {0};
-	struct wlan_objmgr_vdev *vdev;
-	enum wlan_phymode peer_phymode = WLAN_PHYMODE_AUTO;
-	QDF_STATUS status;
-
-	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id,
-						    WLAN_MLME_CM_ID);
-	if (!vdev) {
-		mlme_err("Vdev is null for vdev_id:%d", vdev_id);
-		return false;
-	}
-
-	status = wlan_vdev_get_bss_peer_mac(vdev, &connected_bssid);
-	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_CM_ID);
-
-	if (QDF_IS_STATUS_ERROR(status))
-		return false;
-
-	mlme_get_peer_phymode(psoc, connected_bssid.bytes, &peer_phymode);
-	if (peer_phymode < WLAN_PHYMODE_11NA_HT20) {
-		mlme_debug("vdev:%d PER roam trigger disabled for phymode:%d",
-			   peer_phymode, vdev_id);
-		return false;
-	}
-
-	return true;
-}
-
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 /**
  * cm_roam_reason_vsie() - set roam reason vsie
@@ -152,26 +113,13 @@ static void
 cm_roam_triggers(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
 		 struct wlan_roam_triggers *params)
 {
-	bool is_per_roam_enabled;
-
 	params->vdev_id = vdev_id;
 	params->trigger_bitmap =
 		mlme_get_roam_trigger_bitmap(psoc, vdev_id);
-
-	/*
-	 * Disable PER trigger for phymode less than 11n to avoid
-	 * frequent roams as the PER rate threshold is greater than
-	 * 11a/b/g rates
-	 */
-	is_per_roam_enabled = cm_roam_is_per_roam_allowed(psoc, vdev_id);
-	if (!is_per_roam_enabled)
-		params->trigger_bitmap &= ~BIT(ROAM_TRIGGER_REASON_PER);
-
 	params->roam_scan_scheme_bitmap =
 		wlan_cm_get_roam_scan_scheme_bitmap(psoc, vdev_id);
-	wlan_cm_roam_get_vendor_btm_params(psoc, &params->vendor_btm_param);
-	wlan_cm_roam_get_score_delta_params(psoc, params);
-	wlan_cm_roam_get_min_rssi_params(psoc, params);
+	wlan_cm_roam_get_vendor_btm_params(psoc, vdev_id,
+					   &params->vendor_btm_param);
 }
 
 /**
@@ -608,25 +556,6 @@ cm_roam_stop_req(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
 	struct wlan_roam_stop_config *stop_req;
 	QDF_STATUS status;
 
-	cm_roam_set_roam_reason_better_ap(psoc, vdev_id, false);
-	stop_req = qdf_mem_malloc(sizeof(*stop_req));
-	if (!stop_req)
-		return QDF_STATUS_E_NOMEM;
-
-	stop_req->btm_config.vdev_id = vdev_id;
-	stop_req->disconnect_params.vdev_id = vdev_id;
-	stop_req->idle_params.vdev_id = vdev_id;
-	stop_req->roam_triggers.vdev_id = vdev_id;
-	stop_req->rssi_params.vdev_id = vdev_id;
-
-	/* do the filling as csr_post_rso_stop */
-	status = wlan_cm_roam_fill_stop_req(psoc, vdev_id, stop_req, reason);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		mlme_debug("fail to fill stop config req");
-		qdf_mem_free(stop_req);
-		return status;
-	}
-
 	/*
 	 * If roam synch propagation is in progress and an user space
 	 * disconnect is requested, then there is no need to send the
@@ -648,11 +577,29 @@ cm_roam_stop_req(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
 	 * and clean up.
 	 */
 	if (MLME_IS_ROAM_SYNCH_IN_PROGRESS(psoc, vdev_id) &&
-	    stop_req->reason == REASON_ROAM_STOP_ALL) {
+	    reason == REASON_ROAM_STOP_ALL) {
 		mlme_info("vdev_id:%d : Drop RSO stop during roam sync",
 			  vdev_id);
-		qdf_mem_free(stop_req);
-		return QDF_STATUS_SUCCESS;
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	cm_roam_set_roam_reason_better_ap(psoc, vdev_id, false);
+
+	stop_req = qdf_mem_malloc(sizeof(*stop_req));
+	if (!stop_req)
+		return QDF_STATUS_E_NOMEM;
+
+	stop_req->btm_config.vdev_id = vdev_id;
+	stop_req->disconnect_params.vdev_id = vdev_id;
+	stop_req->idle_params.vdev_id = vdev_id;
+	stop_req->roam_triggers.vdev_id = vdev_id;
+	stop_req->rssi_params.vdev_id = vdev_id;
+
+	/* do the filling as csr_post_rso_stop */
+	status = wlan_cm_roam_fill_stop_req(psoc, vdev_id, stop_req, reason);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		mlme_debug("fail to fill stop config req");
+		return status;
 	}
 
 	status = wlan_cm_tgt_send_roam_stop_req(psoc, vdev_id, stop_req);
@@ -666,7 +613,7 @@ cm_roam_stop_req(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
 
 	qdf_mem_free(stop_req);
 
-	return QDF_STATUS_SUCCESS;
+	return status;
 }
 
 /**
@@ -720,7 +667,7 @@ cm_roam_fill_per_roam_request(struct wlan_objmgr_psoc *psoc,
 }
 
 /**
- * cm_roam_offload_per_config() - populates roam offload scan request and sends
+ * cm_roam_offload_per_scan() - populates roam offload scan request and sends
  * to fw
  * @psoc: psoc context
  * @vdev_id: vdev id
@@ -731,17 +678,7 @@ static QDF_STATUS
 cm_roam_offload_per_config(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id)
 {
 	struct wlan_per_roam_config_req *req;
-	bool is_per_roam_enabled;
 	QDF_STATUS status;
-
-	/*
-	 * Disable PER trigger for phymode less than 11n to avoid
-	 * frequent roams as the PER rate threshold is greater than
-	 * 11a/b/g rates
-	 */
-	is_per_roam_enabled = cm_roam_is_per_roam_allowed(psoc, vdev_id);
-	if (!is_per_roam_enabled)
-		return QDF_STATUS_SUCCESS;
 
 	req = qdf_mem_malloc(sizeof(*req));
 	if (!req)
@@ -940,8 +877,6 @@ cm_roam_switch_to_deinit(struct wlan_objmgr_pdev *pdev,
 		return status;
 
 	mlme_set_roam_state(psoc, vdev_id, WLAN_ROAM_DEINIT);
-	mlme_clear_operations_bitmap(psoc, vdev_id);
-	wlan_cm_roam_activate_pcl_per_vdev(psoc, vdev_id, false);
 
 	if (reason != REASON_SUPPLICANT_INIT_ROAMING)
 		wlan_cm_enable_roaming_on_connected_sta(pdev, vdev_id);
@@ -1338,156 +1273,4 @@ cm_roam_state_change(struct wlan_objmgr_pdev *pdev,
 	}
 
 	return status;
-}
-
-uint32_t cm_crypto_cipher_wmi_cipher(int32_t cipherset)
-{
-	if (!cipherset || cipherset < 0)
-		return WMI_CIPHER_NONE;
-
-	if (QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_GCM) ||
-	    QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_GCM_256))
-		return WMI_CIPHER_AES_GCM;
-
-	if (QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_CCM) ||
-	    QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_OCB) ||
-	    QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_CCM_256))
-		return WMI_CIPHER_AES_CCM;
-
-	if (QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_TKIP))
-		return WMI_CIPHER_TKIP;
-
-	if (QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_CMAC) ||
-	    QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_CMAC_256))
-		return WMI_CIPHER_AES_CMAC;
-
-	if (QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_WAPI_GCM4) ||
-	    QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_WAPI_SMS4))
-		return WMI_CIPHER_WAPI;
-
-	if (QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_GMAC) ||
-	    QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_AES_GMAC_256))
-		return WMI_CIPHER_AES_GMAC;
-
-	if (QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_WEP) ||
-	    QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_WEP_40) ||
-	    QDF_HAS_PARAM(cipherset, WLAN_CRYPTO_CIPHER_WEP_104))
-		return WMI_CIPHER_WEP;
-
-	return WMI_CIPHER_NONE;
-}
-
-static uint32_t cm_get_rsn_wmi_auth_type(int32_t akm)
-{
-	/* Try the more preferred ones first. */
-	if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_FT_FILS_SHA384))
-		return WMI_AUTH_FT_RSNA_FILS_SHA384;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_FT_FILS_SHA256))
-		return WMI_AUTH_FT_RSNA_FILS_SHA256;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_FILS_SHA384))
-		return WMI_AUTH_RSNA_FILS_SHA384;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_FILS_SHA256))
-		return WMI_AUTH_RSNA_FILS_SHA256;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_FT_SAE))
-		return WMI_AUTH_FT_RSNA_SAE;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_SAE))
-		return WMI_AUTH_WPA3_SAE;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_OWE))
-		return WMI_AUTH_WPA3_OWE;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_FT_IEEE8021X))
-		return WMI_AUTH_FT_RSNA;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_FT_PSK))
-		return WMI_AUTH_FT_RSNA_PSK;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_IEEE8021X))
-		return WMI_AUTH_RSNA;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_PSK))
-		return WMI_AUTH_RSNA_PSK;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_CCKM))
-		return WMI_AUTH_CCKM_RSNA;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_PSK_SHA256))
-		return WMI_AUTH_RSNA_PSK_SHA256;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_IEEE8021X_SHA256))
-		return WMI_AUTH_RSNA_8021X_SHA256;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_IEEE8021X_SUITE_B))
-		return WMI_AUTH_RSNA_SUITE_B_8021X_SHA256;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_IEEE8021X_SUITE_B_192))
-		return WMI_AUTH_RSNA_SUITE_B_8021X_SHA384;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_FT_IEEE8021X_SHA384))
-		return WMI_AUTH_FT_RSNA_SUITE_B_8021X_SHA384;
-	else
-		return WMI_AUTH_NONE;
-}
-
-static uint32_t cm_get_wpa_wmi_auth_type(int32_t akm)
-{
-	/* Try the more preferred ones first. */
-	if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_IEEE8021X))
-		return WMI_AUTH_WPA;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_PSK))
-		return WMI_AUTH_WPA_PSK;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_CCKM))
-		return WMI_AUTH_CCKM_WPA;
-	else
-		return WMI_AUTH_NONE;
-}
-
-static uint32_t cm_get_wapi_wmi_auth_type(int32_t akm)
-{
-	/* Try the more preferred ones first. */
-	if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_WAPI_CERT))
-		return WMI_AUTH_WAPI;
-	else if (QDF_HAS_PARAM(akm, WLAN_CRYPTO_KEY_MGMT_WAPI_PSK))
-		return WMI_AUTH_WAPI_PSK;
-	else
-		return WMI_AUTH_NONE;
-}
-
-uint32_t cm_crypto_authmode_to_wmi_authmode(int32_t authmodeset,
-					    int32_t akm, int32_t ucastcipherset)
-{
-	if (!authmodeset || authmodeset < 0)
-		return WMI_AUTH_OPEN;
-
-	if (QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_OPEN))
-		return WMI_AUTH_OPEN;
-
-	if (QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_AUTO) ||
-	    QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_NONE)) {
-		if ((QDF_HAS_PARAM(ucastcipherset, WLAN_CRYPTO_CIPHER_WEP) ||
-		     QDF_HAS_PARAM(ucastcipherset, WLAN_CRYPTO_CIPHER_WEP_40) ||
-		     QDF_HAS_PARAM(ucastcipherset,
-				   WLAN_CRYPTO_CIPHER_WEP_104) ||
-		     QDF_HAS_PARAM(ucastcipherset, WLAN_CRYPTO_CIPHER_TKIP) ||
-		     QDF_HAS_PARAM(ucastcipherset,
-				   WLAN_CRYPTO_CIPHER_AES_GCM) ||
-		     QDF_HAS_PARAM(ucastcipherset,
-				   WLAN_CRYPTO_CIPHER_AES_GCM_256) ||
-		     QDF_HAS_PARAM(ucastcipherset,
-				   WLAN_CRYPTO_CIPHER_AES_CCM) ||
-		     QDF_HAS_PARAM(ucastcipherset,
-				   WLAN_CRYPTO_CIPHER_AES_OCB) ||
-		     QDF_HAS_PARAM(ucastcipherset,
-				   WLAN_CRYPTO_CIPHER_AES_CCM_256)))
-			return WMI_AUTH_OPEN;
-		else
-			return WMI_AUTH_NONE;
-	}
-
-	if (QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_SHARED))
-		return WMI_AUTH_SHARED;
-
-	if (QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_8021X) ||
-	    QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_RSNA) ||
-	    QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_CCKM) ||
-	    QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_SAE) ||
-	    QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_FILS_SK))
-		return cm_get_rsn_wmi_auth_type(akm);
-
-	if (QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_WPA))
-		return cm_get_wpa_wmi_auth_type(akm);
-
-	if (QDF_HAS_PARAM(authmodeset, WLAN_CRYPTO_AUTH_WAPI))
-		return cm_get_wapi_wmi_auth_type(akm);
-
-	return WMI_AUTH_OPEN;
 }
