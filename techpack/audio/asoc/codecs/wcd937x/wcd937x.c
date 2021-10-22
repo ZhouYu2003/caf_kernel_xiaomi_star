@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -27,6 +27,8 @@
 #include "internal.h"
 #include "asoc/bolero-slave-internal.h"
 
+#define WCD9370_VARIANT 0
+#define WCD9375_VARIANT 5
 #define WCD937X_VARIANT_ENTRY_SIZE 32
 
 #define NUM_SWRS_DT_PARAMS 5
@@ -178,18 +180,6 @@ static int wcd937x_init_reg(struct snd_soc_component *component)
 				0xFF, 0xFA);
 	snd_soc_component_update_bits(component, WCD937X_MICB3_TEST_CTL_1,
 				0xFF, 0xFA);
-	/* Set Bandgap Fine Adjustment to +5mV for Tanggu SMIC part */
-	if (snd_soc_component_read32(component, WCD937X_DIGITAL_EFUSE_REG_16)
-	    == 0x01) {
-		snd_soc_component_update_bits(component,
-				WCD937X_BIAS_VBG_FINE_ADJ, 0xF0, 0xB0);
-	} else if (snd_soc_component_read32(component,
-		WCD937X_DIGITAL_EFUSE_REG_16) == 0x02) {
-		snd_soc_component_update_bits(component,
-				WCD937X_HPH_NEW_INT_RDAC_HD2_CTL_L, 0x1F, 0x04);
-		snd_soc_component_update_bits(component,
-				WCD937X_HPH_NEW_INT_RDAC_HD2_CTL_R, 0x1F, 0x04);
-	}
 	return 0;
 }
 
@@ -2633,30 +2623,6 @@ static ssize_t wcd937x_variant_read(struct snd_info_entry *entry,
 static struct snd_info_entry_ops wcd937x_variant_ops = {
 	.read = wcd937x_variant_read,
 };
-
-/*
- * wcd937x_get_codec_variant
- * @component: component instance
- *
- * Return: codec variant or -EINVAL in error.
- */
-int wcd937x_get_codec_variant(struct snd_soc_component *component)
-{
-	struct wcd937x_priv *priv = NULL;
-
-	if (!component)
-		return -EINVAL;
-
-	priv = snd_soc_component_get_drvdata(component);
-	if (!priv) {
-		dev_err(component->dev,
-			"%s:wcd937x not probed\n", __func__);
-		return -EINVAL;
-	}
-
-	return priv->variant;
-}
-EXPORT_SYMBOL(wcd937x_get_codec_variant);
 
 /*
  * wcd937x_info_create_codec_entry - creates wcd937x module
