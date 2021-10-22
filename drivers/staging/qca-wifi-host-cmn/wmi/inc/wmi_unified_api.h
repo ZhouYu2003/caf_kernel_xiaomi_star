@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -507,13 +507,6 @@ int wmi_get_pending_cmds(wmi_unified_t wmi_handle);
 void wmi_set_target_suspend(wmi_unified_t wmi_handle, bool val);
 
 /**
- *  WMI API to set target suspend command acked flag
- *  @param wmi_handle      : handle to WMI.
- *  @param val             : suspend command acked flag boolean
- */
-void wmi_set_target_suspend_acked(wmi_unified_t wmi_handle, bool val);
-
-/**
  * wmi_is_target_suspended() - WMI API to check target suspend state
  * @wmi_handle: handle to WMI.
  *
@@ -522,17 +515,6 @@ void wmi_set_target_suspend_acked(wmi_unified_t wmi_handle, bool val);
  * Return: true if target is suspended, else false.
  */
 bool wmi_is_target_suspended(struct wmi_unified *wmi_handle);
-
-/**
- * wmi_is_target_suspend_acked() - WMI API to check target suspend command is
- *                                 acked or not
- * @wmi_handle: handle to WMI.
- *
- * WMI API to check whether the target suspend command is acked or not
- *
- * Return: true if target suspend command is acked, else false.
- */
-bool wmi_is_target_suspend_acked(struct wmi_unified *wmi_handle);
 
 #ifdef WLAN_FEATURE_WMI_SEND_RECV_QMI
 /**
@@ -1493,12 +1475,14 @@ QDF_STATUS wmi_unified_process_ll_stats_get_cmd(wmi_unified_t wmi_handle,
  *                                              get station request
  * @wmi_handle: wmi handle
  * @get_req: unified ll stats and get station request command params
+ * @is_always_over_qmi: flag to send stats request always over qmi
  *
  * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
  */
 QDF_STATUS wmi_process_unified_ll_stats_get_sta_cmd(
 				wmi_unified_t wmi_handle,
-				const struct ll_stats_get_params *get_req);
+				const struct ll_stats_get_params *get_req,
+				bool is_always_over_qmi);
 #endif /* FEATURE_CLUB_LL_STATS_AND_GET_STATION */
 #endif /* WLAN_FEATURE_LINK_LAYER_STATS */
 
@@ -4128,20 +4112,6 @@ wmi_unified_extract_vdev_mgmt_offload_event(wmi_unified_t wmi, void *evt_buf,
 				struct mgmt_offload_event_params *params);
 #endif
 
-#ifdef WLAN_FEATURE_PKT_CAPTURE_V2
-/**
- * wmi_unified_extract_smart_monitor_event() - Extract smu event params
- * @wmi: WMI handle
- * @evt_buf: Event buffer
- * @params: Smart monitor event params
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS
-wmi_unified_extract_smart_monitor_event(wmi_unified_t wmi, void *evt_buf,
-					struct smu_event_params *params);
-#endif
-
 #ifdef FEATURE_WLAN_TIME_SYNC_FTM
 /**
  * wmi_unified_send_wlan_time_sync_ftm_trigger() - send ftm timesync trigger cmd
@@ -4230,7 +4200,6 @@ wmi_unified_send_injector_frame_config_cmd(wmi_unified_t wmi_handle,
 QDF_STATUS wmi_unified_send_cp_stats_cmd(wmi_unified_t wmi_handle,
 					 void *buf_ptr, uint32_t buf_len);
 
-
 /**
  * wmi_unified_extract_cp_stats_more_pending() - extract more flag
  * @wmi_handle: wmi handle
@@ -4244,31 +4213,5 @@ QDF_STATUS wmi_unified_send_cp_stats_cmd(wmi_unified_t wmi_handle,
 QDF_STATUS
 wmi_unified_extract_cp_stats_more_pending(wmi_unified_t wmi_handle,
 					  void *evt_buf, uint32_t *more_flag);
-
-/**
- * wmi_extract_pdev_csa_switch_count_status() - extract CSA switch count status
- * from event
- * @wmi_handle: wmi handle
- * @evt_buf: pointer to event buffer
- * @param: Pointer to CSA switch count status param
- *
- * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
- */
-QDF_STATUS wmi_extract_pdev_csa_switch_count_status(
-		wmi_unified_t wmi_handle,
-		void *evt_buf,
-		struct pdev_csa_switch_count_status *param);
-
-/**
- * wmi_unified_send_set_tpc_power_cmd() - send set transmit power info
- * @wmi_handle: wmi handle
- * @vdev_id: vdev id
- * @param: regulatory TPC info
- *
- * Return: QDF_STATUS_SUCCESS for success or error code
- */
-QDF_STATUS wmi_unified_send_set_tpc_power_cmd(wmi_unified_t wmi_handle,
-					      uint8_t vdev_id,
-					      struct reg_tpc_power_info *param);
 
 #endif /* _WMI_UNIFIED_API_H_ */

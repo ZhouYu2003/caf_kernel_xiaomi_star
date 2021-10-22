@@ -1479,10 +1479,9 @@ static inline void __qdf_nbuf_set_pktlen(struct sk_buff *skb, uint32_t len)
 			if (unlikely(pskb_expand_head(skb, 0,
 				len - skb->len - skb_tailroom(skb),
 				GFP_ATOMIC))) {
-				QDF_DEBUG_PANIC(
-				   "SKB tailroom is lessthan requested length."
-				   " tail-room: %u, len: %u, skb->len: %u",
-				   skb_tailroom(skb), len, skb->len);
+				QDF_DEBUG_PANIC("SKB tailroom is lessthan requested length."
+						" tail-room: %u, len: %u, skb->len: %u",
+						skb_tailroom(skb), len, skb->len);
 				dev_kfree_skb_any(skb);
 			}
 		}
